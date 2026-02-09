@@ -21,6 +21,7 @@ const App: React.FC = () => {
 
   const [showServerHelp, setShowServerHelp] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const {
     messages, chats, activeChatId, setActiveChatId, status,
@@ -47,6 +48,7 @@ const App: React.FC = () => {
         status={status}
         createChat={createChat}
         setShowSidebar={setShowSidebar}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       <ChatView
@@ -70,6 +72,9 @@ const App: React.FC = () => {
         currentSettings={settings}
         onSave={handleSaveSettings}
         onOpenServerHelp={() => setShowServerHelp(true)}
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        showTrigger={false}
       />
 
       {showServerHelp && (

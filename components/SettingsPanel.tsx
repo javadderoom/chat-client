@@ -8,11 +8,30 @@ interface SettingsPanelProps {
   currentSettings: UserSettings;
   onSave: (settings: UserSettings) => void;
   onOpenServerHelp: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
+  showTrigger?: boolean;
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ currentSettings, onSave, onOpenServerHelp }) => {
-  const [isOpen, setIsOpen] = useState(false);
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({
+  currentSettings,
+  onSave,
+  onOpenServerHelp,
+  isOpen: propsIsOpen,
+  onClose: propsOnClose,
+  showTrigger = true
+}) => {
+  const [internalIsOpen, setInternalIsOpen] = useState(false);
   const [formData, setFormData] = useState(currentSettings);
+
+  const isOpen = propsIsOpen !== undefined ? propsIsOpen : internalIsOpen;
+  const setIsOpen = (open: boolean) => {
+    if (propsOnClose && !open) {
+      propsOnClose();
+    } else {
+      setInternalIsOpen(open);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,6 +40,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ currentSettings, o
   };
 
   if (!isOpen) {
+    if (!showTrigger) return null;
     return (
       <button
         onClick={() => setIsOpen(true)}
