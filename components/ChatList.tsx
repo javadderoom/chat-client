@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import { Terminal, Plus, MessageSquare, X, Settings } from 'lucide-react';
+import { Terminal, Plus, MessageSquare, X, Settings, LogOut, User } from 'lucide-react';
 import './ChatList.css';
 
 interface Chat {
     id: string;
     name: string;
     description?: string;
+    imageUrl?: string;
+}
+
+interface User {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
 }
 
 interface ChatListProps {
@@ -13,9 +21,11 @@ interface ChatListProps {
     activeChatId: string | null;
     setActiveChatId: (id: string) => void;
     status: string;
-    createChat: (name: string, description: string) => void;
+    createChat: (name: string, description: string, isPrivate?: boolean) => void;
     setShowSidebar: (show: boolean) => void;
     onOpenSettings: () => void;
+    user?: User;
+    onLogout?: () => void;
 }
 
 export const ChatList: React.FC<ChatListProps> = ({
@@ -25,18 +35,22 @@ export const ChatList: React.FC<ChatListProps> = ({
     status,
     createChat,
     setShowSidebar,
-    onOpenSettings
+    onOpenSettings,
+    user,
+    onLogout
 }) => {
     const [showNewChatModal, setShowNewChatModal] = useState(false);
     const [newChatName, setNewChatName] = useState('');
     const [newChatDesc, setNewChatDesc] = useState('');
+    const [newChatPrivate, setNewChatPrivate] = useState(false);
 
     const handleCreateChat = (e: React.FormEvent) => {
         e.preventDefault();
         if (newChatName.trim()) {
-            createChat(newChatName.trim(), newChatDesc.trim());
+            createChat(newChatName.trim(), newChatDesc.trim(), newChatPrivate);
             setNewChatName('');
             setNewChatDesc('');
+            setNewChatPrivate(false);
             setShowNewChatModal(false);
         }
     };
@@ -68,7 +82,11 @@ export const ChatList: React.FC<ChatListProps> = ({
                             }}
                         >
                             <div className="chat_icon">
-                                <MessageSquare size={16} />
+                                {chat.imageUrl ? (
+                                    <img src={chat.imageUrl} alt="" className="chat_list_avatar" />
+                                ) : (
+                                    <MessageSquare size={16} />
+                                )}
                             </div>
                             <div className="chat_info">
                                 <span className="chat_name">{chat.name}</span>
@@ -83,13 +101,30 @@ export const ChatList: React.FC<ChatListProps> = ({
                         <div className={`status_dot ${status.toLowerCase()}`}></div>
                         <span>{status}</span>
                     </div>
-                    <button
-                        className="footer_settings_button"
-                        onClick={onOpenSettings}
-                        title="Configuration"
-                    >
-                        <Settings size={18} />
-                    </button>
+                    <div className="footer_user_section">
+                        {user && (
+                            <div className="user_info" title={`${user.displayName} (@${user.username})`}>
+                                {user.avatarUrl ? (
+                                    <img src={user.avatarUrl} alt="" className="user_avatar_footer" />
+                                ) : (
+                                    <div className="user_icon_footer">
+                                        <User size={16} />
+                                    </div>
+                                )}
+                                <span className="user_display_name">{user.displayName}</span>
+                            </div>
+                        )}
+                        <div className="footer_actions">
+                            {onLogout && (
+                                <button onClick={onLogout} className="footer_logout_button" title="Logout">
+                                    <LogOut size={16} />
+                                </button>
+                            )}
+                            <button onClick={onOpenSettings} className="footer_settings_button" title="Settings">
+                                <Settings size={16} />
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </aside>
 
@@ -120,6 +155,16 @@ export const ChatList: React.FC<ChatListProps> = ({
                                     onChange={e => setNewChatDesc(e.target.value)}
                                     placeholder="Broadcast details..."
                                 />
+                            </div>
+                            <div className="form_group checkbox_group">
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        checked={newChatPrivate}
+                                        onChange={e => setNewChatPrivate(e.target.checked)}
+                                    />
+                                    <span>Private (only invited members can see)</span>
+                                </label>
                             </div>
                             <div className="modal_actions">
                                 <button type="button" onClick={() => setShowNewChatModal(false)} className="cancel_button">Abort</button>

@@ -1,22 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { Send, WifiOff, Activity, Mic, Trash2, X, Square, Edit2, Check, Menu, Share2, Image as ImageIcon, Video as VideoIcon, Music as MusicIcon } from 'lucide-react';
-import { format } from 'date-fns';
+import { Send, WifiOff, Smile, Mic, Trash2, X, Square, Check, Menu, Image as ImageIcon, Video as VideoIcon, Music as MusicIcon, Settings, MessageSquare, Users } from 'lucide-react';
 import { FileUploadButton, UploadResult } from './FileUploadButton';
-import { VoiceMessagePlayer } from './VoiceMessagePlayer';
+import { StickerPicker } from './StickerPicker';
+import { MessageBubble } from './MessageBubble';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
-import { UserSettings, ConnectionStatus, Message } from '../types';
+import { UserSettings, ConnectionStatus, Message, UserInfo } from '../types';
 import './ChatView.css';
 
 import { ConfirmModal } from './ConfirmModal';
 import { ForwardModal } from './ForwardModal';
-
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '👏', '🎉'];
+import { ChatSettingsModal } from './ChatSettingsModal';
+import { ChatMembersPanel } from './ChatMembersPanel';
 
 interface Chat {
     id: string;
     name: string;
     description?: string;
+    imageUrl?: string;
+}
+
+interface User {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
 }
 
 interface ChatViewProps {
@@ -33,7 +40,14 @@ interface ChatViewProps {
     setShowServerHelp: (show: boolean) => void;
     toggleReaction: (messageId: string, emoji: string) => void;
     forwardMessage: (message: Message, targetChatId: string) => void;
+    sendSticker: (stickerId: string, replyToId?: string) => void;
+    updateChat: (chatId: string, data: { name?: string; description?: string; imageUrl?: string }) => void;
+    deleteChat: (chatId: string) => void;
+    setActiveChatId: (chatId: string) => void;
     chats: Chat[];
+    user?: User;
+    token: string | null;
+    users: Record<string, UserInfo>;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -50,8 +64,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setShowServerHelp,
     toggleReaction,
     forwardMessage,
-    chats
+    sendSticker,
+    updateChat,
+    deleteChat,
+    setActiveChatId,
+    chats,
+    user,
+    token,
+    users
 }) => {
+    const userAvatars: Record<string, string> = Object.fromEntries(
+        Object.entries(users).map(([username, data]: [string, UserInfo]) => [username, data.avatarUrl || ''])
+    );
+    
     const [input, setInput] = useState('');
     const [uploadError, setUploadError] = useState<string | null>(null);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -62,6 +87,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
     const [messageToForward, setMessageToForward] = useState<Message | null>(null);
     const [isForwardModalOpen, setIsForwardModalOpen] = useState(false);
+    const [isStickerPickerOpen, setIsStickerPickerOpen] = useState(false);
+    const [isChatSettingsOpen, setIsChatSettingsOpen] = useState(false);
+    const [showMembersPanel, setShowMembersPanel] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -124,6 +152,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             formData.append('file', file);
             const response = await fetch(`${settings.serverUrl}/api/upload/voice`, {
                 method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                },
                 body: formData,
             });
 
@@ -195,6 +226,28 @@ export const ChatView: React.FC<ChatViewProps> = ({
         setActiveMenuId(null);
     };
 
+    const handleDirectMessage = async (username: string) => {
+        setActiveMenuId(null);
+        try {
+            const response = await fetch(`${settings.serverUrl}/api/chats/dm`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
+            if (response.ok) {
+                const dmChat = await response.json();
+                if (setActiveChatId) {
+                    setActiveChatId(dmChat.id);
+                }
+            }
+        } catch (error) {
+            console.error('Error creating DM:', error);
+        }
+    };
+
     const confirmForward = (targetChatId: string) => {
         if (messageToForward) {
             forwardMessage(messageToForward, targetChatId);
@@ -208,24 +261,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
             setActiveMenuId(null);
         } else {
             const rect = e.currentTarget.getBoundingClientRect();
+            const isMe = msg.isMe;
             setMenuPosition({
-                top: rect.top,
-                right: window.innerWidth - rect.right
+                top: rect.bottom,
+                right: isMe ? window.innerWidth - rect.right : rect.left
             });
             setActiveMenuId(msg.id);
         }
     };
 
     useEffect(() => {
-        const handleEvents = () => setActiveMenuId(null);
-        window.addEventListener('scroll', handleEvents, true);
-        window.addEventListener('click', (e) => {
-            if (!(e.target as HTMLElement).closest('.message_actions_popup') &&
-                !(e.target as HTMLElement).closest('.text.me')) {
-                handleEvents();
+        const handleClick = (e: MouseEvent) => {
+            const target = e.target as HTMLElement;
+            const inPopup = target.closest('.message_actions_popup');
+            const inMessageBubble = target.closest('.message_bubble');
+            const inEmojiPicker = target.closest('.emoji_reactions_picker');
+            const inReactionsSubmenu = target.closest('.reactions_submenu');
+            
+            if (!inPopup && !inMessageBubble && !inEmojiPicker && !inReactionsSubmenu) {
+                setActiveMenuId(null);
             }
-        }, true);
-        return () => window.removeEventListener('scroll', handleEvents, true);
+        };
+        
+        window.addEventListener('click', handleClick, true);
+        return () => window.removeEventListener('click', handleClick, true);
     }, []);
 
     return (
@@ -235,10 +294,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <button onClick={() => setShowSidebar(!showSidebar)} className="menu_toggle">
                         <Menu size={20} />
                     </button>
+                    {activeChat?.imageUrl ? (
+                        <img src={activeChat.imageUrl} alt="" className="chat_avatar" />
+                    ) : (
+                        <div className="chat_avatar_placeholder">
+                            <MessageSquare size={20} />
+                        </div>
+                    )}
                     <div className="chat_title">
                         <h2>{activeChat?.name || 'Loading...'}</h2>
                         {activeChat?.description && <p>{activeChat.description}</p>}
                     </div>
+                </div>
+                <div className="header_right">
+                    <button 
+                        onClick={() => setShowMembersPanel(!showMembersPanel)} 
+                        className="chat_settings_btn"
+                        title="Members"
+                    >
+                        <Users size={20} />
+                    </button>
+                    <button 
+                        onClick={() => setIsChatSettingsOpen(true)} 
+                        className="chat_settings_btn"
+                        title="Chat Settings"
+                    >
+                        <Settings size={20} />
+                    </button>
                 </div>
             </header>
 
@@ -259,174 +341,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             </div>
                         );
                     }
-
+                    
                     return (
-                        <div
-                            id={`msg-${msg.id}`}
+                        <MessageBubble
                             key={msg.id}
-                            className={`message ${msg.isMe ? 'me' : 'them'}`}
-                        >
-                            <div className={`info ${msg.isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                                <span className={`username text-xs font-bold ${msg.isMe ? 'text-green-400' : 'text-blue-400'}`}>
-                                    {msg.sender}
-                                </span>
-                                <span className="time">
-                                    {format(msg.timestamp, 'HH:mm:ss')}
-                                </span>
-                            </div>
-
-                            <div
-                                className={`text ${msg.isMe ? 'me' : 'them'} relative group cursor-pointer`}
-                                onClick={(e) => handleMessageClick(e, msg)}
-                            >
-                                {activeMenuId === msg.id && createPortal(
-                                    <div
-                                        className="message_actions_wrapper"
-                                        style={{
-                                            top: `${menuPosition.top}px`,
-                                            right: `${menuPosition.right}px`
-                                        }}
-                                    >
-                                        <div
-                                            className="message_actions_popup"
-                                            onClick={(e) => e.stopPropagation()}
-                                        >
-                                            <div className="emoji_reactions_picker">
-                                                {EMOJIS.map(emoji => (
-                                                    <button
-                                                        key={emoji}
-                                                        className={`emoji_btn ${msg.reactions?.[emoji]?.includes(settings.username) ? 'active' : ''}`}
-                                                        onClick={(e) => { e.stopPropagation(); toggleReaction(msg.id, emoji); setActiveMenuId(null); }}
-                                                    >
-                                                        {emoji}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                            <div className="menu_divider"></div>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); startReply(msg); }}
-                                                className="menu_item"
-                                            >
-                                                <Mic size={14} style={{ transform: 'rotate(180deg)' }} />
-                                                <span>Reply</span>
-                                            </button>
-
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); handleForward(msg); }}
-                                                className="menu_item"
-                                            >
-                                                <Share2 size={14} />
-                                                <span>Forward</span>
-                                            </button>
-
-                                            {msg.isMe && (
-                                                <>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); startEditing(msg); setActiveMenuId(null); }}
-                                                        className="menu_item"
-                                                    >
-                                                        <Edit2 size={14} />
-                                                        <span>Edit</span>
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}
-                                                        className="menu_item delete"
-                                                    >
-                                                        <Trash2 size={14} />
-                                                        <span>Delete</span>
-                                                    </button>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>,
-                                    document.body
-                                )}
-
-                                {msg.isForwarded && (
-                                    <div className="forwarded_label">
-                                        <Share2 size={10} />
-                                        <span>Forwarded from {msg.forwardedFrom}</span>
-                                    </div>
-                                )}
-
-                                {msg.replyToId && (
-                                    <div
-                                        className="reply_reference"
-                                        onClick={(e) => { e.stopPropagation(); scrollToMessage(msg.replyToId!); }}
-                                    >
-                                        <div className="reply_line"></div>
-                                        <div className="reply_content_preview">
-                                            <span className="reply_user">
-                                                {messages.find(m => m.id === msg.replyToId)?.sender || 'Message'}
-                                            </span>
-                                            <p className="reply_text">
-                                                {truncateText(messages.find(m => m.id === msg.replyToId)?.text || 'Original message not found')}
-                                            </p>
-                                        </div>
-                                    </div>
-                                )}
-                                {msg.messageType === 'image' && msg.mediaUrl && (
-                                    <div className="media_content">
-                                        <img
-                                            src={msg.mediaUrl}
-                                            alt={msg.fileName || 'Image'}
-                                            className="media_image"
-                                            onClick={() => window.open(msg.mediaUrl, '_blank')}
-                                        />
-                                    </div>
-                                )}
-
-                                {msg.messageType === 'video' && msg.mediaUrl && (
-                                    <div className="media_content">
-                                        <video
-                                            src={msg.mediaUrl}
-                                            controls
-                                            className="media_video"
-                                        />
-                                    </div>
-                                )}
-
-                                {(msg.messageType === 'audio' || msg.messageType === 'voice') && msg.mediaUrl && (
-                                    <div className="media_content">
-                                        {msg.fileName && (
-                                            <div className="media_filename">
-                                                {truncateText(msg.fileName)}
-                                            </div>
-                                        )}
-                                        <VoiceMessagePlayer
-                                            src={msg.mediaUrl}
-                                            duration={msg.mediaDuration}
-                                        />
-                                    </div>
-                                )}
-
-                                {(msg.text && (!msg.mediaUrl || (!msg.text.startsWith('[IMAGE]') && !msg.text.startsWith('[VIDEO]') && !msg.text.startsWith('[AUDIO]') && !msg.text.startsWith('[FILE]')))) && (
-                                    <div className="message_text_content">
-                                        {msg.text}
-                                        {msg.updatedAt && <span className="text-[10px] text-gray-500 ml-2 italic">(edited)</span>}
-                                    </div>
-                                )}
-
-                                {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-                                    <div className="message_reactions">
-                                        {Object.entries(msg.reactions).map(([emoji, reactors]) => {
-                                            const users = reactors as string[];
-                                            return (
-                                                <div
-                                                    key={emoji}
-                                                    className={`reaction_pill ${users.includes(settings.username) ? 'active' : ''}`}
-                                                    onClick={(e) => { e.stopPropagation(); toggleReaction(msg.id, emoji); }}
-                                                    title={users.join(', ')}
-                                                >
-                                                    <span className="reaction_emoji">{emoji}</span>
-                                                    <span className="reaction_count">{users.length}</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                            msg={msg}
+                            settings={settings}
+                            messages={messages}
+                            activeMenuId={activeMenuId}
+                            menuPosition={menuPosition}
+                            userAvatars={userAvatars}
+                            users={users}
+                            onMessageClick={handleMessageClick}
+                            toggleReaction={toggleReaction}
+                            onReply={startReply}
+                            onForward={handleForward}
+                            onDirectMessage={handleDirectMessage}
+                            onEdit={startEditing}
+                            onDelete={handleDelete}
+                            scrollToMessage={scrollToMessage}
+                            truncateText={truncateText}
+                        />
                     );
                 })}
                 <div ref={messagesEndRef} />
@@ -474,7 +409,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 {replyingToMessage && (
                     <div className="editing_preview reply_mode">
                         <div className="editing_info">
-                            <span className="editing_label">Replying to {replyingToMessage.sender}</span>
+                            <span className="editing_label">Replying to {replyingToMessage.displayName || replyingToMessage.sender}</span>
                             <p className="editing_text">
                                 {truncateText(replyingToMessage.text)}
                             </p>
@@ -504,8 +439,29 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             </div>
                         ) : (
                             <>
+                                <button
+                                    type="button"
+                                    className="sticker_trigger"
+                                    onClick={() => setIsStickerPickerOpen(!isStickerPickerOpen)}
+                                    title="Stickers"
+                                >
+                                    <Smile size={20} />
+                                </button>
+
+                                {isStickerPickerOpen && (
+                                    <StickerPicker
+                                        onSelect={(id) => {
+                                            sendSticker(id, replyingToMessage?.id);
+                                            setIsStickerPickerOpen(false);
+                                            setReplyingToMessage(null);
+                                        }}
+                                        onClose={() => setIsStickerPickerOpen(false)}
+                                    />
+                                )}
+
                                 <FileUploadButton
                                     serverUrl={settings.serverUrl}
+                                    token={token}
                                     disabled={status !== ConnectionStatus.CONNECTED && !settings.isDemoMode}
                                     onUploadComplete={handleUploadComplete}
                                     onError={(error: string) => {
@@ -587,6 +543,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 onForward={confirmForward}
                 onCancel={() => setIsForwardModalOpen(false)}
             />
+
+            <ChatSettingsModal
+                isOpen={isChatSettingsOpen}
+                chat={activeChat}
+                serverUrl={settings.serverUrl}
+                token={token || ''}
+                onSave={(chatId, data) => {
+                    updateChat(chatId, data);
+                    setIsChatSettingsOpen(false);
+                }}
+                onDelete={(chatId) => {
+                    deleteChat(chatId);
+                    setIsChatSettingsOpen(false);
+                }}
+                onCancel={() => setIsChatSettingsOpen(false)}
+            />
+
+            {showMembersPanel && activeChat && (
+                <ChatMembersPanel
+                    chatId={activeChat.id}
+                    serverUrl={settings.serverUrl}
+                    token={token || ''}
+                    onClose={() => setShowMembersPanel(false)}
+                />
+            )}
         </div>
     );
 };
+      
