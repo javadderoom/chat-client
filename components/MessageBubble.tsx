@@ -30,6 +30,7 @@ interface MessageBubbleProps {
     onDelete: (id: string) => void;
     scrollToMessage: (id: string) => void;
     truncateText: (text: string, length?: number) => string;
+    onProfileClick?: (user: { username: string; displayName: string; avatarUrl?: string }) => void;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -49,6 +50,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     onDelete,
     scrollToMessage,
     truncateText,
+    onProfileClick,
 }) => {
     const [showReactionsList, setShowReactionsList] = useState(false);
     const hasMedia = msg.messageType === 'image' || msg.messageType === 'video' || msg.messageType === 'audio' || msg.messageType === 'voice';
@@ -60,7 +62,17 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             onClick={(e: React.MouseEvent) => onMessageClick(e, msg)}
         >   
             {!msg.isMe && (
-                <div className="message_avatar">
+                <div 
+                    className="message_avatar"
+                    onClick={(e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        onProfileClick?.({
+                            username: msg.sender,
+                            displayName: msg.displayName || msg.sender,
+                            avatarUrl: userAvatars[msg.sender.toLowerCase()]
+                        });
+                    }}
+                >
                     {userAvatars[msg.sender.toLowerCase()] && userAvatars[msg.sender.toLowerCase()] !== '' ? (
                         <img src={userAvatars[msg.sender.toLowerCase()]} alt="" />
                     ) : (
