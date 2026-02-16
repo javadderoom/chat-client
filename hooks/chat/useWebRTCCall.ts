@@ -24,6 +24,8 @@ interface UseWebRTCCallOptions {
 }
 
 const buildRtcConfig = (): RTCConfiguration => {
+    //yes
+    
     const turnUrls = (import.meta.env.VITE_TURN_URLS || '')
         .split(',')
         .map((value: string) => value.trim())
