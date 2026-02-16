@@ -1,16 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, WifiOff, Smile, Mic, Trash2, X, Square, Check, Menu, Image as ImageIcon, Video as VideoIcon, Music as MusicIcon, Settings, MessageSquare, Users } from 'lucide-react';
+import { Send, WifiOff, Smile, Mic, Trash2, X, Square, Check, Image as ImageIcon, Video as VideoIcon, Music as MusicIcon, Settings, MessageSquare, Pin, Search, Menu } from 'lucide-react';
 import { FileUploadButton, UploadResult } from './FileUploadButton';
 import { StickerPicker } from './StickerPicker';
 import { MessageBubble } from './MessageBubble';
 import { useVoiceRecorder } from '../hooks/useVoiceRecorder';
-import { UserSettings, ConnectionStatus, Message, UserInfo } from '../types';
+import { UserSettings, ConnectionStatus, Message, UserInfo, PinnedMessageSummary } from '../types';
 import './ChatView.css';
 
 import { ConfirmModal } from './ConfirmModal';
 import { ForwardModal } from './ForwardModal';
 import { ChatSettingsModal } from './ChatSettingsModal';
-import { ChatMembersPanel } from './ChatMembersPanel';
 import { ProfileModal } from './ProfileModal';
 
 interface Chat {
@@ -18,6 +17,10 @@ interface Chat {
     name: string;
     description?: string;
     imageUrl?: string;
+    pinnedMessageId?: string | null;
+    pinnedByUserId?: string | null;
+    pinnedAt?: string | number | null;
+    pinnedMessage?: PinnedMessageSummary | null;
 }
 
 interface User {
@@ -44,12 +47,17 @@ interface ChatViewProps {
     sendSticker: (stickerId: string, replyToId?: string) => void;
     updateChat: (chatId: string, data: { name?: string; description?: string; imageUrl?: string }) => void;
     deleteChat: (chatId: string) => void;
+    pinMessage: (messageId: string) => void;
+    unpinMessage: (chatId?: string) => void;
     setActiveChatId: (chatId: string) => void;
     fetchChats: () => Promise<void>;
     chats: Chat[];
     user?: User;
     token: string | null;
     users: Record<string, UserInfo>;
+    hasMoreMessages: boolean;
+    isLoadingOlderMessages: boolean;
+    loadOlderMessages: () => Promise<number>;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -69,12 +77,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
     sendSticker,
     updateChat,
     deleteChat,
+    pinMessage,
+    unpinMessage,
     setActiveChatId,
     fetchChats,
     chats,
     user,
     token,
-    users
+    users,
+    hasMoreMessages,
+    isLoadingOlderMessages,
+    loadOlderMessages
 }) => {
     const userAvatars: Record<string, string> = Object.fromEntries(
         Object.entries(users).map(([username, data]: [string, UserInfo]) => [username, data.avatarUrl || ''])
@@ -92,12 +105,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const [isForwardModalOpen, setIsForwardModalOpen] = useState(false);
     const [isStickerPickerOpen, setIsStickerPickerOpen] = useState(false);
     const [isChatSettingsOpen, setIsChatSettingsOpen] = useState(false);
-    const [showMembersPanel, setShowMembersPanel] = useState(false);
     const [profileUser, setProfileUser] = useState<{ username: string; displayName: string; avatarUrl?: string } | null>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<Message[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
+    const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const messagesContainerRef = useRef<HTMLElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const hasMoreMessagesRef = useRef(hasMoreMessages);
+    const searchRequestIdRef = useRef(0);
     const prevMessagesLengthRef = useRef(messages.length);
+    const prevFirstMessageIdRef = useRef<string | null>(messages[0]?.id || null);
 
     const truncateText = (text: string, length: number = 20) => {
         if (!text) return '';
@@ -105,12 +126,129 @@ export const ChatView: React.FC<ChatViewProps> = ({
     };
 
     useEffect(() => {
-        // Only scroll if a new message was added (length increased)
-        if (messages.length > prevMessagesLengthRef.current) {
+        hasMoreMessagesRef.current = hasMoreMessages;
+    }, [hasMoreMessages]);
+
+    useEffect(() => {
+        const query = searchQuery.trim();
+
+        if (!query || !activeChat?.id || !token || settings.isDemoMode) {
+            setSearchResults([]);
+            setIsSearching(false);
+            return;
+        }
+
+        const requestId = ++searchRequestIdRef.current;
+        const controller = new AbortController();
+
+        const timeout = setTimeout(async () => {
+            setIsSearching(true);
+            try {
+                const response = await fetch(
+                    `${settings.serverUrl}/api/messages?chatId=${activeChat.id}&q=${encodeURIComponent(query)}&limit=20`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        },
+                        signal: controller.signal
+                    }
+                );
+
+                if (!response.ok) {
+                    setSearchResults([]);
+                    return;
+                }
+
+                const dbMessages = await response.json();
+                const mappedMessages: Message[] = dbMessages.reverse().map((dbMsg: any) => ({
+                    id: dbMsg.id,
+                    text: dbMsg.content,
+                    sender: dbMsg.username,
+                    displayName: dbMsg.displayName || dbMsg.username,
+                    timestamp: new Date(dbMsg.createdAt).getTime(),
+                    isMe: dbMsg.username === settings.username,
+                    isSystem: false,
+                    messageType: dbMsg.messageType as any,
+                    mediaUrl: dbMsg.mediaUrl,
+                    mediaType: dbMsg.mediaType,
+                    mediaDuration: dbMsg.mediaDuration,
+                    fileName: dbMsg.fileName,
+                    fileSize: dbMsg.fileSize,
+                    replyToId: dbMsg.replyToId,
+                    chatId: dbMsg.chatId,
+                    reactions: dbMsg.reactions || {},
+                    isForwarded: dbMsg.isForwarded,
+                    forwardedFrom: dbMsg.forwardedFrom,
+                    stickerId: dbMsg.stickerId,
+                    updatedAt: dbMsg.updatedAt ? new Date(dbMsg.updatedAt).getTime() : undefined
+                }));
+
+                if (requestId === searchRequestIdRef.current) {
+                    setSearchResults(mappedMessages);
+                }
+            } catch (error) {
+                if (controller.signal.aborted) return;
+                console.error('Error searching messages:', error);
+                setSearchResults([]);
+            } finally {
+                if (requestId === searchRequestIdRef.current) {
+                    setIsSearching(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            clearTimeout(timeout);
+            controller.abort();
+        };
+    }, [searchQuery, activeChat?.id, token, settings.serverUrl, settings.username, settings.isDemoMode]);
+
+    useEffect(() => {
+        if (!isSearchExpanded) return;
+        searchInputRef.current?.focus();
+    }, [isSearchExpanded]);
+
+    const getPinnedPreviewText = (message?: Message | PinnedMessageSummary | null) => {
+        if (!message) return 'Pinned message';
+        if (message.messageType === 'sticker') return '[STICKER]';
+        if (message.messageType === 'image') return '[IMAGE]';
+        if (message.messageType === 'video') return '[VIDEO]';
+        if (message.messageType === 'audio') return '[AUDIO]';
+        return message.text || 'Pinned message';
+    };
+
+    const activePinnedMessage = activeChat?.pinnedMessageId
+        ? (messages.find(m => m.id === activeChat.pinnedMessageId) || activeChat.pinnedMessage || null)
+        : null;
+
+    useEffect(() => {
+        // Auto-scroll only when new messages are appended, not when older messages are prepended.
+        const firstMessageId = messages[0]?.id || null;
+        const isPrependedHistory = firstMessageId !== prevFirstMessageIdRef.current;
+        if (messages.length > prevMessagesLengthRef.current && !isPrependedHistory) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
         prevMessagesLengthRef.current = messages.length;
+        prevFirstMessageIdRef.current = firstMessageId;
     }, [messages]);
+
+    const handleMessagesScroll = async (e: React.UIEvent<HTMLElement>) => {
+        const target = e.currentTarget;
+        if (target.scrollTop > 80 || isLoadingOlderMessages || !hasMoreMessages) {
+            return;
+        }
+
+        const prevScrollHeight = target.scrollHeight;
+        const prevScrollTop = target.scrollTop;
+        const loadedCount = await loadOlderMessages();
+        if (loadedCount === 0) return;
+
+        requestAnimationFrame(() => {
+            if (!messagesContainerRef.current) return;
+            const nextScrollHeight = messagesContainerRef.current.scrollHeight;
+            messagesContainerRef.current.scrollTop = prevScrollTop + (nextScrollHeight - prevScrollHeight);
+        });
+    };
 
     useEffect(() => {
         if (inputRef.current) {
@@ -209,7 +347,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
             element.scrollIntoView({ behavior: 'smooth', block: 'center' });
             element.classList.add('highlight_message');
             setTimeout(() => element.classList.remove('highlight_message'), 2000);
+            return true;
         }
+        return false;
+    };
+
+    const waitForPaint = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const handleSearchResultSelect = async (messageId: string) => {
+        let found = scrollToMessage(messageId);
+        let attempts = 0;
+
+        while (!found && hasMoreMessagesRef.current && attempts < 20) {
+            const loaded = await loadOlderMessages();
+            if (loaded === 0) break;
+            await waitForPaint();
+            found = scrollToMessage(messageId);
+            attempts++;
+        }
+
+        setIsSearchExpanded(false);
     };
 
     const handleDelete = (id: string) => {
@@ -298,7 +455,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <div className="main_content">
             <header>
                 <div className="header_left">
-                    <button onClick={() => setShowSidebar(!showSidebar)} className="menu_toggle">
+                    <button
+                        type="button"
+                        onClick={() => setShowSidebar(!showSidebar)}
+                        className="menu_toggle"
+                        title="Chats"
+                    >
                         <Menu size={20} />
                     </button>
                     {activeChat?.imageUrl ? (
@@ -314,12 +476,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </div>
                 </div>
                 <div className="header_right">
-                    <button 
-                        onClick={() => setShowMembersPanel(!showMembersPanel)} 
+                    <button
+                        type="button"
                         className="chat_settings_btn"
-                        title="Members"
+                        title="Search"
+                        onClick={() => setIsSearchExpanded(true)}
                     >
-                        <Users size={20} />
+                        <Search size={20} />
                     </button>
                     <button 
                         onClick={() => setIsChatSettingsOpen(true)} 
@@ -329,9 +492,113 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         <Settings size={20} />
                     </button>
                 </div>
+                {isSearchExpanded && (
+                    <div className="header_search_overlay">
+                        <div className="header_search_box">
+                            <Search size={16} />
+                            <input
+                                ref={searchInputRef}
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Escape') {
+                                        setIsSearchExpanded(false);
+                                    }
+                                }}
+                                placeholder="Search messages in this chat"
+                            />
+                            {searchQuery && (
+                                <button
+                                    type="button"
+                                    className="header_search_icon_btn"
+                                    onClick={() => setSearchQuery('')}
+                                    title="Clear search"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                className="header_search_icon_btn"
+                                onClick={() => setIsSearchExpanded(false)}
+                                title="Close search"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+                        {searchQuery.trim() && (
+                            <div className="header_search_results">
+                                {isSearching && (
+                                    <div className="header_search_result_hint">Searching...</div>
+                                )}
+                                {!isSearching && searchResults.length === 0 && (
+                                    <div className="header_search_result_hint">No matches</div>
+                                )}
+                                {!isSearching && searchResults.map((result) => (
+                                    <button
+                                        key={result.id}
+                                        type="button"
+                                        className="header_search_result_item"
+                                        onClick={() => handleSearchResultSelect(result.id)}
+                                    >
+                                        <span className="header_search_result_name">
+                                            {result.displayName || result.sender}
+                                        </span>
+                                        <span className="header_search_result_text">
+                                            {truncateText(result.text || '[Media]', 80)}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
             </header>
 
-            <main>
+            {activeChat?.pinnedMessageId && (
+                <div
+                    className="pinned_banner"
+                    onClick={() => {
+                        if (activeChat.pinnedMessageId) {
+                            scrollToMessage(activeChat.pinnedMessageId);
+                        }
+                    }}
+                >
+                    <Pin size={14} />
+                    <div className="pinned_banner_content">
+                        <span className="pinned_banner_label">Pinned message</span>
+                        <p>{truncateText(getPinnedPreviewText(activePinnedMessage), 80)}</p>
+                    </div>
+                    <button
+                        type="button"
+                        className="pinned_banner_unpin"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (activeChat?.id) {
+                                unpinMessage(activeChat.id);
+                            }
+                        }}
+                        title="Unpin message"
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
+
+            <main ref={messagesContainerRef} onScroll={handleMessagesScroll}>
+                {isLoadingOlderMessages && (
+                    <div className="status_message">
+                        <span>Loading older messages...</span>
+                    </div>
+                )}
+
+                {!hasMoreMessages && messages.length > 0 && (
+                    <div className="status_message">
+                        <span>Beginning of chat history</span>
+                    </div>
+                )}
+
                 {messages.length === 0 && (
                     <div className="signal">
                         <WifiOff size={48} className="mb-4" />
@@ -366,6 +633,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                             onDirectMessage={handleDirectMessage}
                             onEdit={startEditing}
                             onDelete={handleDelete}
+                            pinnedMessageId={activeChat?.pinnedMessageId || null}
+                            onPin={pinMessage}
+                            onUnpin={() => unpinMessage(activeChat?.id)}
                             scrollToMessage={scrollToMessage}
                             truncateText={truncateText}
                             onProfileClick={setProfileUser}
@@ -567,15 +837,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 }}
                 onCancel={() => setIsChatSettingsOpen(false)}
             />
-
-            {showMembersPanel && activeChat && (
-                <ChatMembersPanel
-                    chatId={activeChat.id}
-                    serverUrl={settings.serverUrl}
-                    token={token || ''}
-                    onClose={() => setShowMembersPanel(false)}
-                />
-            )}
 
             <ProfileModal
                 isOpen={!!profileUser}

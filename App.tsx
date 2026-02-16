@@ -36,7 +36,8 @@ const App: React.FC = () => {
 
   const {
     messages, chats, activeChatId, setActiveChatId, status, fetchChats,
-    sendMessage, sendMediaMessage, editMessage, deleteMessage, createChat, toggleReaction, forwardMessage, sendSticker, updateChat, deleteChat, users
+    sendMessage, sendMediaMessage, editMessage, deleteMessage, createChat, toggleReaction, forwardMessage, sendSticker, updateChat, deleteChat, pinMessage, unpinMessage, users,
+    hasMoreMessages, isLoadingOlderMessages, loadOlderMessages
   } = useChatConnection(settings, token, user);
 
   const handleSaveSettings = (newSettings: UserSettings) => {
@@ -98,12 +99,17 @@ return (
         sendSticker={sendSticker}
         updateChat={updateChat}
         deleteChat={deleteChat}
+        pinMessage={pinMessage}
+        unpinMessage={unpinMessage}
         setActiveChatId={setActiveChatId}
         fetchChats={fetchChats}
         chats={chats}
         user={user}
         token={token}
         users={users}
+        hasMoreMessages={hasMoreMessages}
+        isLoadingOlderMessages={isLoadingOlderMessages}
+        loadOlderMessages={loadOlderMessages}
       />
 
       <SettingsPanel
