@@ -84,6 +84,9 @@ export const useChatConnection = (settings: UserSettings, token: string | null, 
         isForwarded: dbMsg.isForwarded,
         forwardedFrom: dbMsg.forwardedFrom,
         stickerId: dbMsg.stickerId,
+        deliveredCount: dbMsg.deliveredCount || 0,
+        seenCount: dbMsg.seenCount || 0,
+        seenBy: dbMsg.seenBy || [],
         updatedAt: dbMsg.updatedAt ? new Date(dbMsg.updatedAt).getTime() : undefined
     }), [settings.username]);
 
@@ -234,6 +237,9 @@ export const useChatConnection = (settings: UserSettings, token: string | null, 
                     const loadedMessages: Message[] = dbMessages.reverse().map(mapDbMessage);
                     setMessages(loadedMessages);
                     setHasMoreMessages(dbMessages.length === PAGE_SIZE);
+                    if (socket && socket.connected) {
+                        socket.emit('markChatSeen', activeChatId);
+                    }
                 }
             } catch (error) {
                 console.error('Error loading messages:', error);
@@ -277,9 +283,9 @@ export const useChatConnection = (settings: UserSettings, token: string | null, 
             if (!response.ok) return 0;
 
             const dbMessages: DbMessage[] = await response.json();
-            const olderMessages = dbMessages.reverse().map(mapDbMessage);
-            const existingIds = new Set(messages.map(m => m.id));
-            const uniqueOlderMessages = olderMessages.filter(m => !existingIds.has(m.id));
+            const olderMessages: Message[] = dbMessages.reverse().map(mapDbMessage);
+            const existingIds: Set<string> = new Set(messages.map((m: Message) => m.id));
+            const uniqueOlderMessages: Message[] = olderMessages.filter((m: Message) => !existingIds.has(m.id));
 
             if (uniqueOlderMessages.length > 0) {
                 setMessages(prev => [...uniqueOlderMessages, ...prev]);
