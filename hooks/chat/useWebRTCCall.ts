@@ -23,11 +23,28 @@ interface UseWebRTCCallOptions {
     user: User | null;
 }
 
-const RTC_CONFIG: RTCConfiguration = {
-    iceServers: [
+const buildRtcConfig = (): RTCConfiguration => {
+    const turnUrls = (import.meta.env.VITE_TURN_URLS || '')
+        .split(',')
+        .map((value: string) => value.trim())
+        .filter(Boolean);
+    const turnUsername = import.meta.env.VITE_TURN_USERNAME || '';
+    const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL || '';
+
+    const iceServers: RTCIceServer[] = [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' }
-    ]
+    ];
+
+    if (turnUrls.length > 0) {
+        iceServers.push({
+            urls: turnUrls,
+            username: turnUsername,
+            credential: turnCredential
+        });
+    }
+
+    return { iceServers };
 };
 
 export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptions) => {
@@ -44,16 +61,23 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
     const localStreamRef = useRef<MediaStream | null>(null);
     const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
     const currentChatIdRef = useRef<string | null>(activeChatId);
+    const disconnectTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
         currentChatIdRef.current = activeChatId;
     }, [activeChatId]);
 
-    const cleanupCall = useCallback((keepIncoming = false) => {
+    const cleanupCall = useCallback((keepIncoming = false, preserveError = false) => {
+        if (disconnectTimeoutRef.current) {
+            window.clearTimeout(disconnectTimeoutRef.current);
+            disconnectTimeoutRef.current = null;
+        }
+
         if (peerRef.current) {
             peerRef.current.onicecandidate = null;
             peerRef.current.ontrack = null;
             peerRef.current.onconnectionstatechange = null;
+            peerRef.current.oniceconnectionstatechange = null;
             peerRef.current.close();
             peerRef.current = null;
         }
@@ -67,7 +91,9 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
         setRemoteStream(null);
         setCallStatus('idle');
         setCallPeerName('');
-        setCallError(null);
+        if (!preserveError) {
+            setCallError(null);
+        }
         targetUserIdRef.current = null;
         pendingCandidatesRef.current = [];
         if (!keepIncoming) {
@@ -76,6 +102,11 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
     }, []);
 
     const stopLocalMediaOnly = useCallback(() => {
+        if (disconnectTimeoutRef.current) {
+            window.clearTimeout(disconnectTimeoutRef.current);
+            disconnectTimeoutRef.current = null;
+        }
+
         if (localStreamRef.current) {
             localStreamRef.current.getTracks().forEach(track => track.stop());
             localStreamRef.current = null;
@@ -88,6 +119,7 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
             peerRef.current.onicecandidate = null;
             peerRef.current.ontrack = null;
             peerRef.current.onconnectionstatechange = null;
+            peerRef.current.oniceconnectionstatechange = null;
             peerRef.current.close();
             peerRef.current = null;
         }
@@ -96,7 +128,7 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
     const createPeerConnection = useCallback((chatId: string, targetUserId: string) => {
         if (!socket) return null;
 
-        const peer = new RTCPeerConnection(RTC_CONFIG);
+        const peer = new RTCPeerConnection(buildRtcConfig());
         peerRef.current = peer;
         targetUserIdRef.current = targetUserId;
 
@@ -122,8 +154,39 @@ export const useWebRTCCall = ({ socket, activeChatId, user }: UseWebRTCCallOptio
         peer.onconnectionstatechange = () => {
             if (!peerRef.current) return;
             const state = peerRef.current.connectionState;
-            if (state === 'failed' || state === 'disconnected' || state === 'closed') {
-                cleanupCall();
+            if (state === 'failed' || state === 'closed') {
+                if (state === 'failed') {
+                    setCallError('Peer connection failed. Configure TURN for cross-network calls.');
+                }
+                cleanupCall(false, state === 'failed');
+            }
+        };
+
+        peer.oniceconnectionstatechange = () => {
+            if (!peerRef.current) return;
+            const state = peerRef.current.iceConnectionState;
+
+            if (state === 'disconnected') {
+                if (disconnectTimeoutRef.current) {
+                    window.clearTimeout(disconnectTimeoutRef.current);
+                }
+                disconnectTimeoutRef.current = window.setTimeout(() => {
+                    cleanupCall();
+                    disconnectTimeoutRef.current = null;
+                }, 8000);
+                return;
+            }
+
+            if (disconnectTimeoutRef.current && (state === 'connected' || state === 'completed')) {
+                window.clearTimeout(disconnectTimeoutRef.current);
+                disconnectTimeoutRef.current = null;
+            }
+
+            if (state === 'failed' || state === 'closed') {
+                if (state === 'failed') {
+                    setCallError('Network path failed. TURN relay is required for many mobile/carrier NATs.');
+                }
+                cleanupCall(false, state === 'failed');
             }
         };
 

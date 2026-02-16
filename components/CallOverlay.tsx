@@ -34,6 +34,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
 }) => {
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
+    const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
     useEffect(() => {
         if (localVideoRef.current) {
@@ -44,6 +45,13 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
     useEffect(() => {
         if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = remoteStream;
+        }
+    }, [remoteStream]);
+
+    useEffect(() => {
+        if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = remoteStream;
+            remoteAudioRef.current.play().catch(() => { });
         }
     }, [remoteStream]);
 
@@ -68,6 +76,7 @@ export const CallOverlay: React.FC<CallOverlayProps> = ({
                 {callError && <div className="call_error">{callError}</div>}
 
                 <div className="call_media">
+                    <audio ref={remoteAudioRef} autoPlay />
                     {callMode === 'video' ? (
                         <>
                             <video ref={remoteVideoRef} className="call_video_remote" autoPlay playsInline />
